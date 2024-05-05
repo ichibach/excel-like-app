@@ -12,6 +12,19 @@
   "tauri": {
     "allowlist": {
       "all": false,
+      "fs": {
+        "all": false,
+        "readFile": true,
+        "writeFile": true,
+        "readDir": true,
+        "copyFile": true,
+        "createDir": true,
+        "removeDir": true,
+        "removeFile": true,
+        "renameFile": true,
+        "exists": true,
+        "scope": ["*/**"]
+      },
       "shell": {
         "all": false,
         "open": true
@@ -27,9 +40,7 @@
     },
     "windows": [
       {
-        "title": "excel-like-app",
-        "width": 800,
-        "height": 600
+        "title": "excel-like-app"
       }
     ],
     "security": {
