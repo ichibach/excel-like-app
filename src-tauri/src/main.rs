@@ -2,9 +2,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 
-use calamine::{open_workbook, Data, Reader, Xlsx};
-use serde::{Serialize, Serializer};
 
+
+
+
+use std::{borrow::BorrowMut, cell::RefCell, rc::Rc, sync::Mutex};
+
+use calamine::{open_workbook, Data, Reader, Xlsx};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+
+mod xlsx_core;
+use tauri::State;
+use xlsx_core::{SpreadSheetCells, CellValue};
+
+
+struct Storage {
+    store: Mutex<SpreadSheetCells>,
+}
+
+struct AppState (Rc<RefCell<SpreadSheetCells>>);
 
 // create the error type that represents all errors possible in our program
 #[derive(Debug, thiserror::Error)]
@@ -41,33 +57,85 @@ impl Serialize for WrappedData {
     }
 }
 
-// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
+impl<'de> Deserialize<'de> for CellValue {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+      D: Deserializer<'de>,
+  {
+      struct CellValueVisitor;
+
+      impl<'de> de::Visitor<'de> for CellValueVisitor {
+          type Value = CellValue;
+
+          fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+              formatter.write_str("an integer, unsigned integer, or float")
+          }
+
+          fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+          where
+              E: de::Error,
+          {
+              Ok(CellValue::Int(value as isize))
+          }
+
+          fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+          where
+              E: de::Error,
+          {
+              Ok(CellValue::UInt(value as usize))
+          }
+
+          fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+          where
+              E: de::Error,
+          {
+              Ok(CellValue::Float(value))
+          }
+
+          fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+          where
+              E: de::Error,
+          {
+              // При желании, можно также обработать парсинг строки в числовой тип
+              Err(de::Error::custom("expected an integer, unsigned integer, or float"))
+          }
+      }
+
+      deserializer.deserialize_any(CellValueVisitor)
+  }
+}
+
+
+impl Serialize for CellValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self {
+            CellValue::Float(f) => serializer.serialize_f64(*f),
+            CellValue::Int(i) => serializer.serialize_i64((*i).try_into().unwrap()),
+            CellValue::UInt(ui) => serializer.serialize_u64((*ui).try_into().unwrap()),
+            _ => unimplemented!("Serialization for other data types not implemented"),
+        }
+    }
+}
+
+
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+fn set_cell_value(key: &str, value: CellValue, storage: State<Storage>) {
+    storage.store.lock().unwrap().set(key, value);
 }
 
 #[tauri::command]
-fn open_file(file: &str) -> Result<Vec<(usize, usize, WrappedData)>,Error> {
-
-    let mut workbook: Xlsx<_> = open_workbook(file).expect("failed to try read file");
-
-    let mut data:Vec<(usize, usize, WrappedData)> = Vec::new();
-
-    if let Some(Ok(r)) = workbook.worksheet_range_at(0) {
-        for cell in r.cells() {
-            data.push((cell.0, cell.1, WrappedData(cell.2.clone())));
-            println!("row={:?}, coll={:?}, value={:?}", cell.0, cell.1, cell.2);
-        }
-    }
-
-    Ok(data)   
-    
+fn get_range(range: &str, storage: State<Storage>) -> Vec<(String, CellValue)> {
+    // state.get_range(range)
+    storage.store.lock().unwrap().get_range(range)
 }
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet, open_file])
+        .manage(Storage { store: Mutex::new(SpreadSheetCells::new())})
+        .invoke_handler(tauri::generate_handler![set_cell_value, get_range])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
